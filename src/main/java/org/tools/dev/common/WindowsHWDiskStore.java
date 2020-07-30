@@ -89,8 +89,6 @@ public final class WindowsHWDiskStore extends AbstractHWDiskStore {
 
     private static final Pattern DEVICE_ID = Pattern.compile(".*\\.DeviceID=\"(.*)\"");
 
-    private static final int BUFSIZE = 255;
-
     private long reads = 0L;
     private long readBytes = 0L;
     private long writes = 0L;
@@ -296,91 +294,46 @@ public final class WindowsHWDiskStore extends AbstractHWDiskStore {
         for (int i = 0; i < diskPartitionMap.getResultCount(); i++) {
             mAnt = DEVICE_ID.matcher(WmiUtil.getRefString(diskPartitionMap, DiskToPartitionProperty.ANTECEDENT, i));
             mDep = DEVICE_ID.matcher(WmiUtil.getRefString(diskPartitionMap, DiskToPartitionProperty.DEPENDENT, i));
+            long size = WmiUtil.getUint64(diskPartitionMap, DiskToPartitionProperty.ENDINGADDRESS, i)
+                    - WmiUtil.getUint64(diskPartitionMap, DiskToPartitionProperty.STARTINGADDRESS, i) + 1L;
             if (mAnt.matches() && mDep.matches()) {
-               if(maps.partitionToLogicalDriveMap.containsKey(mAnt.group(1))) {
-                   maps.partitionToLogicalDriveMap.get(mAnt.group(1)).add(mDep.group(1)+ "\\");
-               } else {
-                  List<String>  list  = new ArrayList<String>();
-                  list.add(mDep.group(1)+ "\\");
-                  maps.partitionToLogicalDriveMap.put(mAnt.group(1),list);
-               }
+                if (maps.partitionToLogicalDriveMap.containsKey(mAnt.group(1))) {
+                    maps.partitionToLogicalDriveMap.get(mAnt.group(1)).add(new Pair<>(mDep.group(1) + "\\", size));
+                } else {
+                    List<Pair<String, Long>> list = new ArrayList<>();
+                    list.add(new Pair<>(mDep.group(1) + "\\", size));
+                    maps.partitionToLogicalDriveMap.put(mAnt.group(1), list);
+                }
             }
         }
 
         // Next, get all partitions and create objects
         WmiResult<DiskPartitionProperty> hwPartitionQueryMap = Win32DiskPartition.queryPartition();
-        int count = hwPartitionQueryMap.getResultCount();
-        System.out.println("  cimTypeMap ==============cimTypeMap  " );
-        System.out.println("INDEX:  "+hwPartitionQueryMap.getCIMType(DiskPartitionProperty.INDEX ));
-        System.out.println("DESCRIPTION: "+hwPartitionQueryMap.getCIMType(DiskPartitionProperty.DESCRIPTION ));
-        System.out.println("DEVICEID: "+hwPartitionQueryMap.getCIMType(DiskPartitionProperty.DEVICEID ));
-        System.out.println("DISKINDEX:  "+hwPartitionQueryMap.getCIMType(DiskPartitionProperty.DISKINDEX ));
-        System.out.println("NAME: "+hwPartitionQueryMap.getCIMType(DiskPartitionProperty.NAME ));
-        System.out.println("SIZE: "+hwPartitionQueryMap.getCIMType(DiskPartitionProperty.SIZE ));
-        System.out.println("TYPE:  "+hwPartitionQueryMap.getCIMType(DiskPartitionProperty.TYPE ));
-        
-        System.out.println("  vtTypeMap ==============vtTypeMap  " );
-        System.out.println("    INDEX:  "+hwPartitionQueryMap.getVtType(DiskPartitionProperty.INDEX ));
-        System.out.println("    DESCRIPTION: "+hwPartitionQueryMap.getVtType(DiskPartitionProperty.DESCRIPTION ));
-        System.out.println("    DEVICEID: "+hwPartitionQueryMap.getVtType(DiskPartitionProperty.DEVICEID ));
-        System.out.println("    DISKINDEX:  "+hwPartitionQueryMap.getVtType(DiskPartitionProperty.DISKINDEX ));
-        System.out.println("    NAME: "+hwPartitionQueryMap.getVtType(DiskPartitionProperty.NAME ));
-        System.out.println("    SIZE: "+hwPartitionQueryMap.getVtType( DiskPartitionProperty.SIZE ));
-        System.out.println("    TYPE:  "+hwPartitionQueryMap.getVtType(DiskPartitionProperty.TYPE ));
-        
-        for(int a = 0; a < count; a++) {
-            System.out.println("       getValue ============== ("+a+"): " );
-            System.out.println("            INDEX:  "+hwPartitionQueryMap.getValue(DiskPartitionProperty.INDEX, a));
-            System.out.println("            DESCRIPTION: "+hwPartitionQueryMap.getValue(DiskPartitionProperty.DESCRIPTION, a));
-            System.out.println("            DEVICEID: "+hwPartitionQueryMap.getValue(DiskPartitionProperty.DEVICEID, a));
-            System.out.println("            DISKINDEX:  "+hwPartitionQueryMap.getValue(DiskPartitionProperty.DISKINDEX, a));
-            System.out.println("            NAME: "+hwPartitionQueryMap.getValue(DiskPartitionProperty.NAME, a));
-            System.out.println("            SIZE: "+FormatUtil.formatBytes(Long.valueOf(hwPartitionQueryMap.getValue(DiskPartitionProperty.SIZE, a).toString())));
-            System.out.println("            TYPE:  "+hwPartitionQueryMap.getValue(DiskPartitionProperty.TYPE, a));
-        }
-        
-        
-        
-        
         for (int i = 0; i < hwPartitionQueryMap.getResultCount(); i++) {
             String deviceID = WmiUtil.getString(hwPartitionQueryMap, DiskPartitionProperty.DEVICEID, i);
-            List<String> logicalDrives = maps.partitionToLogicalDriveMap.getOrDefault(deviceID,null);
-            if (logicalDrives == null ) {
+            List<Pair<String, Long>> logicalDrives = maps.partitionToLogicalDriveMap.get(deviceID);
+            if (logicalDrives == null) {
                 continue;
             }
             for (int j = 0; j < logicalDrives.size(); j++) {
-                String logicalDrive = logicalDrives.get(j);
-                String uuid = "";
-                long volumeSize = 0l;
-                if (logicalDrive != null && !logicalDrive.isEmpty()) {
-                    // Get matching volume for UUID
-                    char[] volumeChr = new char[BUFSIZE];
-                    Kernel32.INSTANCE.GetVolumeNameForVolumeMountPoint(logicalDrive, volumeChr, BUFSIZE);
-                    String volumeStr = new String(volumeChr);
-                   System.out.println("==============volumeStr:"+volumeStr);
-                   WinNT.LARGE_INTEGER  totalBytes = new WinNT.LARGE_INTEGER(0L);
-                   Kernel32.INSTANCE.GetDiskFreeSpaceEx(volumeStr, null, totalBytes, null);
-                   volumeSize = totalBytes.getValue();
-                   System.out.println("==============volumeSize:"+volumeSize+"  format:"+FormatUtil.formatBytes(volumeSize));
-                    uuid = ParseUtil.parseUuidOrDefault(new String(volumeChr).trim(), "");
-                }
-                
-              long sizeFromMap =  WmiUtil.getUint64(hwPartitionQueryMap, DiskPartitionProperty.SIZE, i);
-              System.out.println("*************sizeFromMap:"+sizeFromMap+"  format:"+FormatUtil.formatBytes(sizeFromMap));
-                HWPartition pt =
-                    new HWPartition(WmiUtil.getString(hwPartitionQueryMap, DiskPartitionProperty.NAME, i),
+                Pair<String, Long> logicalDrive = logicalDrives.get(j);
+                if (logicalDrive != null && !logicalDrive.getA().isEmpty()) {
+                    HWPartition pt = new HWPartition(
+                            WmiUtil.getString(hwPartitionQueryMap, DiskPartitionProperty.NAME, i),
                             WmiUtil.getString(hwPartitionQueryMap, DiskPartitionProperty.TYPE, i),
-                            WmiUtil.getString(hwPartitionQueryMap, DiskPartitionProperty.DESCRIPTION, i), uuid,
-                            WmiUtil.getUint64(hwPartitionQueryMap, DiskPartitionProperty.SIZE, i),
+                            WmiUtil.getString(hwPartitionQueryMap, DiskPartitionProperty.DESCRIPTION, i), "",
+                            logicalDrive.getB(),
                             WmiUtil.getUint32(hwPartitionQueryMap, DiskPartitionProperty.DISKINDEX, i),
-                            WmiUtil.getUint32(hwPartitionQueryMap, DiskPartitionProperty.INDEX, i), logicalDrive);
-               if (maps.partitionMap.containsKey(deviceID)) {
-                   maps.partitionMap.get(deviceID).add(pt);
-               } else {
-                   List<HWPartition> ptlist = new ArrayList<HWPartition>();
-                   ptlist.add(pt);
-                   maps.partitionMap.put(deviceID, ptlist);
-               }
+                            WmiUtil.getUint32(hwPartitionQueryMap, DiskPartitionProperty.INDEX, i),
+                            logicalDrive.getA());
+                    if (maps.partitionMap.containsKey(deviceID)) {
+                        maps.partitionMap.get(deviceID).add(pt);
+                    } else {
+                        List<HWPartition> ptlist = new ArrayList<>();
+                        ptlist.add(pt);
+                        maps.partitionMap.put(deviceID, ptlist);
+                    }
+                }
             }
         }
         return maps;
@@ -418,7 +371,8 @@ public final class WindowsHWDiskStore extends AbstractHWDiskStore {
      */
     private static final class PartitionMaps {
         private final Map<String, List<String>> driveToPartitionMap = new HashMap<>();
-        private final Map<String, List<String>> partitionToLogicalDriveMap = new HashMap<>();
+        private final Map<String, List<Pair<String, Long>>> partitionToLogicalDriveMap = new HashMap<>();
         private final Map<String, List<HWPartition>> partitionMap = new HashMap<>();
     }
+ 
 }
